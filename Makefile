@@ -378,7 +378,7 @@ intel-mpi:   # BUILDTARGET Intel compiler suite with Intel MPI library
 	"OPENMP = $(OPENMP)" \
 	"CPPFLAGS = $(MODEL_FORMULATION) -D_MPI" )
 
-intel-vecna   # BUILDTARGET Intel compiler suite with Intel MPI library
+intel-vecna:   # BUILDTARGET Intel compiler suite with Intel MPI library
 	( $(MAKE) all \
 	"FC_PARALLEL = mpifort" \
 	"CC_PARALLEL = mpicc" \
