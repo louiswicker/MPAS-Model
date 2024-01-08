@@ -110,18 +110,24 @@ module mpas_convective_diagnostics
 
         integer :: iCell, k, nVertLevelsP1, i, j
         integer, pointer :: nCells, nVertLevels, nCellsSolve, nVertexDegree, nVertices
+        integer, dimension(:), pointer :: nEdgesOnCell
+        integer, dimension(:,:), pointer :: edgesOnCell, cellsOnCell
         integer, pointer :: moist_start, moist_end
         integer, dimension(:,:), pointer :: cellsOnVertex
+        integer, dimension(:), pointer :: bdyMaskCell
+        real (kind=RKIND), dimension(:), pointer :: dcEdge, dvEdge
         real (kind=RKIND), dimension(:,:,:), pointer :: scalars
         real (kind=RKIND), dimension(:,:), pointer :: cqu
 
-        real (kind=RKIND), allocatable, dimension(:,:) :: updraft_helicity
+        real (kind=RKIND), allocatable, dimension(:,:) :: updraft_helicity, smooth_helicity
         real (kind=RKIND), allocatable, dimension(:) :: z_agl
         real (kind=RKIND), dimension(:,:), pointer :: kiteAreasOnVertex, vorticity, w, zgrid
         real (kind=RKIND), dimension(:), pointer :: areaCell, updraft_helicity_max, w_velocity_max
         real (kind=RKIND), dimension(:), pointer :: wind_speed_level1_max
         real (kind=RKIND), dimension(:,:), pointer :: uzonal, umeridional
-        real (kind=RKIND) :: uph
+        real (kind=RKIND)            :: uph
+
+        real (kind=RKIND), parameter :: uh_smooth = 0.25
 
         if (is_needed_updraft_helicity .or. is_needed_w_max .or. is_needed_lml_wsp_max) then
 
@@ -130,6 +136,14 @@ module mpas_convective_diagnostics
             call mpas_pool_get_dimension(mesh, 'nCellsSolve', nCellsSolve)
             call mpas_pool_get_dimension(mesh, 'nVertices', nVertices)
             call mpas_pool_get_dimension(mesh, 'vertexDegree', nVertexDegree)
+
+            call mpas_pool_get_array(mesh, 'cellsOnCell', cellsOnCell)
+            call mpas_pool_get_array(mesh, 'dvEdge', dvEdge)
+            call mpas_pool_get_array(mesh, 'dcEdge', dcEdge)
+            call mpas_pool_get_array(mesh, 'nEdgesOnCell', nEdgesOnCell)
+            call mpas_pool_get_array(mesh, 'edgesOnCell', edgesOnCell)
+            call mpas_pool_get_array(mesh, 'bdyMaskCell', bdyMaskCell)
+
             call mpas_pool_get_array(mesh, 'areaCell', areaCell)
             call mpas_pool_get_array(mesh, 'kiteAreasOnVertex', kiteAreasOnVertex)
             call mpas_pool_get_array(mesh, 'cellsOnVertex', cellsOnVertex)
@@ -164,20 +178,49 @@ module mpas_convective_diagnostics
             end if
 
             if (is_needed_updraft_helicity) then
+
                 allocate(updraft_helicity(nVertLevels,nCells+1))
                 updraft_helicity(:,:) = 0.
+
                 do i=1,nVertices
                   do j=1,nvertexDegree
                     iCell = cellsOnVertex(j,i)
-                    updraft_helicity(1:nVertLevels,iCell) = updraft_helicity(1:nVertLevels,iCell) + kiteAreasOnVertex(j,i)*vorticity(1:nVertLevels,i)
+                    updraft_helicity(1:nVertLevels,iCell) = updraft_helicity(1:nVertLevels,iCell) &
+                                                          + kiteAreasOnVertex(j,i)*vorticity(1:nVertLevels,i)
                   end do
                 end do
-                do iCell=1,nCellsSolve
+
+                do iCell=1,nCells
                   do k=1,nVertLevels
                     updraft_helicity(k,iCell) =  max(0.,0.5*(w(k,iCell)+w(k+1,iCell)))  &                  
-                                                           * max(0.,updraft_helicity(k,iCell)/areaCell(iCell))                     
+                                               * max(0.,updraft_helicity(k,iCell)/areaCell(iCell))                     
                   end do
                 end do
+!
+!  4th order smoothing of updraft helicity - code adapted from terrain smoothing algorithm in mpas_init_cases.F
+!
+                allocate(smooth_helicity(nVertLevels,nCells+1))
+
+                smooth_helicity(:,:) = 0.
+
+                do iCell=1,nCellsSolve
+                    if (bdyMaskCell(iCell) == 0)  then ! do smoothing only on the internal mesh
+                        do j = 1,nEdgesOnCell(iCell)
+                           do k=1,nVertLevels
+                             smooth_helicity(k,iCell) = smooth_helicity(k,iCell) & 
+                                  + dvEdge(edgesOnCell(j,iCell)) / dcEdge(edgesOnCell(j,iCell))    &
+                                  * (updraft_helicity(k,cellsOnCell(j,iCell))-updraft_helicity(k,iCell))
+                           end do
+                        end do
+                    end if
+                end do
+
+                do k=1,nVertLevels
+                  updraft_helicity(k,1:nCellsSolve) = updraft_helicity(k,1:nCellsSolve) &
+                                                    + uh_smooth*smooth_helicity(k,1:nCellsSolve)
+                enddo
+
+                deallocate(smooth_helicity)
 !
 !  compute diagnostics
 !
@@ -193,6 +236,7 @@ module mpas_convective_diagnostics
             end if
     
             deallocate(z_agl)
+
         end if
    
     end subroutine convective_diagnostics_update
